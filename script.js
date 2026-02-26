@@ -1,63 +1,34 @@
 document.addEventListener('DOMContentLoaded', function() {
-    const scanBtn = document.getElementById('scanBtn');
-    const devicesList = document.getElementById('devicesList');
-
-    // Обработчик нажатия кнопки поиска
-    scanBtn.addEventListener('click', async function() {
-        devicesList.innerHTML = '<p class="loading">Поиск устройств...</p>';
-        try {
-            // Запрос разрешения на доступ к BLE‑устройствам
-            const device = await navigator.bluetooth.requestDevice({
-                filters: [{ services: ['generic_access'] }], // Можно указать конкретные сервисы
-                optionalServices: ['battery_service'] // Дополнительные сервисы для запроса
-            });
-
-            // Добавляем найденное устройство в список
-            addDeviceToList(device);
-
-            // Продолжаем поиск других устройств
-            startContinuousScan();
-        } catch (error) {
-            devicesList.innerHTML = `<p style="color: red;">Ошибка: ${error.message}</p>`;
-        }
-    });
-
-    // Функция для непрерывного поиска устройств
-    async function startContinuousScan() {
-        try {
-            while (true) {
-                const device = await navigator.bluetooth.requestDevice({
-                    filters: [{ services: ['generic_access'] }],
-                    optionalServices: ['battery_service'],
-                    acceptAllDevices: true // Разрешить все устройства (менее безопасно)
-                });
-
-                // Проверяем, не добавлено ли уже это устройство
-                if (!document.querySelector(`[data-device-id="${device.id}"]`)) {
-                    addDeviceToList(device);
-                }
-            }
-        } catch (error) {
-            if (error.name !== 'AbortError') {
-                console.error('Ошибка непрерывного сканирования:', error);
-            }
-        }
+    // Проверяем поддержку Web Bluetooth API для браузера
+    const support_browser_bluetooth = document.getElementById('support_browser_bluetooth');
+    if (!navigator.bluetooth) {
+        support_browser_bluetooth.textContent = '✘ Ваш браузер не поддерживает Web Bluetooth API.';
+    } else {
+        support_browser_bluetooth.textContent = '✔ Ваш браузер поддерживает Web Bluetooth API.'
     }
-
-    // Функция добавления устройства в список на странице
-    function addDeviceToList(device) {
-        const deviceElement = document.createElement('div');
-        deviceElement.className = 'device';
-        deviceElement.setAttribute('data-device-id', device.id);
-
-        deviceElement.innerHTML = `
-            <h3>${device.name || 'Без названия'}</h3>
-            <p><strong>ID:</strong> ${device.id}</p>
-            <p><strong>Адрес:</strong> ${device.address || 'Не указан'}</p>
-            <p><strong>Класс:</strong> ${device.deviceClass || 'Не указан'}</p>
-            <p><strong>Подключено:</strong> ${device.gatt?.connected ? 'Да' : 'Нет'}</p>
-        `;
-
-        devicesList.appendChild(deviceElement);
-    }
+    // Проверяем поддержку Web Bluetooth API для устройства
+    const support_device_bluetooth = document.getElementById('support_device_bluetooth');
+    navigator.bluetooth.getAvailability().then((available) => {
+        if (available) {
+            support_device_bluetooth.textContent = '✔ Ваше устройство поддерживает Web Bluetooth API.'
+        } else {
+            support_device_bluetooth.textContent = '✘ У вашего устройства выключен или отсутствует Bluetooth адаптер';
+        }
+        });
 });
+async function scanForBle() {
+    if (!navigator.bluetooth) return;
+
+    const output = document.getElementById('output');
+    try {
+        // Запрашиваем разрешение на доступ к устройствам BLE внутри обработчика события
+        await navigator.bluetooth.requestDevice({
+            filters: [{services: ['generic_access']}],
+            optionalServices: [],
+        });
+        
+        // Далее идет остальной ваш код обработки найденных устройств...
+    } catch(error) {
+        output.textContent = `Ошибка подключения к устройству: ${error.message}`;
+    }
+}

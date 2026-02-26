@@ -23,25 +23,14 @@
         button:hover {
             background: #45a049;
         }
-        .device {
-            border: 1px solid #ddd;
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 5px;
-        }
-        .device h3 {
-            margin: 0 0 10px 0;
-        }
-        .loading {
-            color: #666;
-            font-style: italic;
-        }
     </style>
 </head>
 <body>
     <h1>Поиск BLE‑устройств</h1>
-    <button id="scanBtn">Найти устройства</button>
-    <div id="devicesList"></div>
+    <button onclick="scanForBle()">Найти устройства</button>
+    <div id="support_browser_bluetooth"></div>
+    <div id="support_device_bluetooth"></div>
+    <div id="output"></div>
 
     <script src="script.js"></script>
 </body>
