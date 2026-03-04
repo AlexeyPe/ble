@@ -28,13 +28,27 @@ async function scanForBle() {
         //     filters: [{services: ['generic_access']}],
         //     optionalServices: [],
         // });
-        let device = await navigator.bluetooth.requestDevice({
-            acceptAllDevices: true,
-            optionalServices: [SERVICE_UUID]//Сервис UART
+        // let device = await navigator.bluetooth.requestDevice({
+        //     acceptAllDevices: true,
+        //     optionalServices: [SERVICE_UUID]//Сервис UART
+        // });
+        // let service = await server.getPrimaryService(SERVICE_UUID);
+        // console.log(`device:`,device);
+        // console.log(`service:`,service);
+        await navigator.bluetooth.requestDevice({
+            filters: [{
+                // services: ['battery_service', 'heart_rate'] // стандартизированные службы
+                // ИЛИ
+                services: [SERVICE_UUID] // 16‑битный или полный UUID
+            }]
+            })
+        .then(device => {
+            console.log('Выбрано устройство:', device.name);
+            return device.gatt.connect();
+        })
+        .catch(error => {
+            console.error('Ошибка выбора устройства:', error);
         });
-        let service = await server.getPrimaryService(SERVICE_UUID);
-        console.log(`device:`,device);
-        console.log(`service:`,service);
         // Далее идет остальной ваш код обработки найденных устройств...
     } catch(error) {
         output.textContent = `Ошибка подключения к устройству: ${error.message}`;
