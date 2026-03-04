@@ -1,3 +1,5 @@
+const SERVICE_UUID = "642f72d2-778b-4f91-bcfa-4c65350c2c07"; // Сервис UART
+
 document.addEventListener('DOMContentLoaded', function() {
     // Проверяем поддержку Web Bluetooth API для браузера
     const support_browser_bluetooth = document.getElementById('support_browser_bluetooth');
@@ -22,11 +24,17 @@ async function scanForBle() {
     const output = document.getElementById('output');
     try {
         // Запрашиваем разрешение на доступ к устройствам BLE внутри обработчика события
-        await navigator.bluetooth.requestDevice({
-            filters: [{services: ['generic_access']}],
-            optionalServices: [],
+        // await navigator.bluetooth.requestDevice({
+        //     filters: [{services: ['generic_access']}],
+        //     optionalServices: [],
+        // });
+        let device = await navigator.bluetooth.requestDevice({
+            acceptAllDevices: true,
+            optionalServices: [SERVICE_UUID]//Сервис UART
         });
-        
+        let service = await server.getPrimaryService(SERVICE_UUID);
+        console.log(`device:`,device);
+        console.log(`service:`,service);
         // Далее идет остальной ваш код обработки найденных устройств...
     } catch(error) {
         output.textContent = `Ошибка подключения к устройству: ${error.message}`;
