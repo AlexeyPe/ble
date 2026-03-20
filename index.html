@@ -4,14 +4,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Поиск BLE‑устройств</title>
+    <!-- <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css"> -->
     <style>
+        #output {
+            background-color: #edeff3;
+            border-radius: 10px;
+            overflow: scroll;
+            max-height: 150px;
+            padding-left: 2px;
+        }
         body {
             font-family: Arial, sans-serif;
             max-width: 800px;
             margin: 0 auto;
             padding: 20px;
         }
-        button {
+        .btn {
             padding: 10px 20px;
             font-size: 16px;
             background: #4CAF50;
@@ -20,19 +28,547 @@
             cursor: pointer;
             margin-bottom: 20px;
         }
-        button:hover {
+        .btn:hover {
             background: #45a049;
         }
+        .switch label {
+            color: black;
+            font-size: large;
+            display: flex;
+            align-items: center;
+        }
+        .switch label span:first-of-type {
+            margin-right: 2px;
+        }
     </style>
+    <link rel="stylesheet" href="./icons.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <h1>Поиск BLE‑устройств</h1>
-    <button onclick="scanForBle()">Найти устройства</button>
+    <button class="btn" onclick="scanForBle()">Найти устройства</button>
     <div id="support_browser_blueth"></div>
     <div id="support_device_blueth"></div>
     <div id="device_select"></div>
     <div id="output"></div>
-    <script src="script.js"></script>
+    <hr>
+
+    <button onclick="console.log('meh')">meh</button>
+    <h2>Температура воды</h2>
+
+    <div>
+        <label>Временной шаг:</label>
+        <select onchange="stepWT=Number(this.item(selectedIndex).value);updateChartWT()">
+            <option value="1">1 час</option>
+            <option value="4">4 часа</option>
+            <option value="8"selected>8 часов</option>
+            <option value="12">12 часов</option>
+            <option value="24">24 часа</option>
+        </select>
+    </div>
+
+    <div>
+        <canvas id="ChartTW" style="width: 800px;height: 90vh;"></canvas>
+    </div>
     
+    <label style="font-size:small;">
+        Целевая t° воды, °C:
+        <input id="finWT" type="number" onchange="setTWT(this.value)"
+            class="inWT"    
+            name="water-temperature"
+            min="0"
+            max="80"
+            step="0.25"
+            value="25"
+            style="width: 20px;"
+            >
+    </label>
+    <button class="inWT" style="font-size:smaller;" onclick="setTWT(20)">20°C</button>
+    <button class="inWT" style="font-size:smaller;" onclick="setTWT(25)">25°C</button>
+    <button class="inWT" style="font-size:smaller;" onclick="setTWT(30)">30°C</button>
+
+    <hr style="margin-bottom: 200px;">
 </body>
+<script>
+const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+const UUID_WT = "beb5483e-36e1-4688-b7f5-ea07361b26a8"; // Теукущая температура воды
+/**
+ * @type {BluetoothDevice}
+ */
+let _device;
+/**
+ * @type {BluetoothRemoteGATTCharacteristic}
+ */
+let char_led;
+/** Шаг температуры воды на графике, часы */
+let stepWT = 12;
+/** График температуры воды */
+let chartWT;
+
+const datasetsTW = {
+    datasets: [
+        {
+            label: 't° воды, °C',
+            data: [15, 20, 28],
+            borderColor: "#36a2eb",
+        },{
+            label: 'Целевая t° воды, °C',
+            data: [25, 25, 25],
+            borderColor: "#ff9f40",
+        }
+    ],
+    labels: [timestampToLabel(Date.now()+2000), timestampToLabel(Date.now()+1000), timestampToLabel(Date.now())]
+}
+/// Конфиг графика температуры воды
+const configTW = {
+  type: 'line',
+  data: datasetsTW,
+  options: {
+    interaction: {
+      intersect: false,
+      mode: 'index',
+    },
+    responsive: true,
+    plugins: {
+      legend: {
+        position: 'top',
+      },
+      title: {
+        display: false,
+        text: 'График температуры воды'
+      }
+    }
+  },
+};
+
+// Получить Label для графика из timestamp(секундного) 
+function timestampToLabel(timestamp) {
+    const date = new Date(timestamp);
+    
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0'); // getMonth() возвращает 0–11
+    const year = date.getFullYear();
+
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+
+    const dateStr = `${day}.${month}.${year}`;
+    const timeStr = `${hours}:${minutes}:${seconds}`;
+    return [timeStr, dateStr]
+}
+
+function check_device() {
+    const device_select = document.getElementById('device_select');
+    if (_device == null) device_select.textContent = `✘ Устройство не выбрано.`
+    else device_select.textContent = `✔ Устройство выбрано: ${_device.name}`
+}
+
+function check_can_bt() {
+    // Проверяем поддержку Web Bluetooth API для браузера
+    const support_browser_blueth = document.getElementById('support_browser_blueth');
+    if (!navigator.bluetooth) {
+        support_browser_blueth.textContent = '✘ Ваш браузер не поддерживает Web Bluetooth API.';
+    } else {
+        support_browser_blueth.textContent = '✔ Ваш браузер поддерживает Web Bluetooth API.'
+    }
+    // Проверяем поддержку Web Bluetooth API для устройства
+    const support_device_blueth = document.getElementById('support_device_blueth');
+    navigator.bluetooth.getAvailability().then((available) => {
+        if (available) {
+            support_device_blueth.textContent = '✔ Ваше устройство поддерживает Web Bluetooth API.'
+        } else {
+            support_device_blueth.textContent = '✘ У вашего устройства выключен или отсутствует Bluetooth адаптер';
+        }
+    });
+}
+
+// Setup function
+document.addEventListener('DOMContentLoaded', function() {
+    check_can_bt();
+    check_device();
+    setupChart();
+});
+
+/**
+ * Устанавливает значение для характеристики Bluetooth‑устройства
+ * @param {BluetoothDevice} char — Bluetooth‑устройство
+ * @param {string} value — значение в виде строки
+ * @returns {void}
+ */
+async function setc(char, value) {
+    console.log(`setc ${value}`)
+    if (char == null) {
+        console.log(`char == null`)
+        return;
+    }
+    const encoder = new TextEncoder();
+    await char.writeValueWithResponse(encoder.encode(value).buffer)
+    console.log(`good setc ${value}`)
+}
+
+function addOutput(value) {
+    const output = document.getElementById('output');
+    let valueOutput = output.innerHTML
+    valueOutput += value;
+    output.innerHTML = valueOutput
+    output.scrollTop = output.scrollHeight;
+}
+
+/**
+ * Вызывается клиентом при нажатием на кнопку.
+ * 
+ */
+async function scanForBle() {
+    if (!navigator.bluetooth) return;
+
+    addOutput(`<br>Попытка подключения`)
+    datasetsTW.datasets[0].data = [] // вода
+    datasetsTW.datasets[1].data = [] // ключевая
+    datasetsTW.labels = [];
+    try {
+        // Запрос устройства
+        _device = await navigator.bluetooth.requestDevice({
+            // filters: [{
+            //     // services: ['battery_service', 'heart_rate'] // стандартизированные службы
+            //     // ИЛИ
+            //     services: [SERVICE_UUID] // 16‑битный или полный UUID
+            // }],
+            optionalServices: [SERVICE_UUID, UUID_WT],
+            acceptAllDevices: true
+        });
+        addOutput(`<br>Выбрано устройство: ${_device}`)
+        check_device();
+
+        // Подключение к GATT‑серверу
+        const server = await _device.gatt.connect();
+        console.log(server)
+        addOutput(`<br>Подключение к GATT‑серверу: ${server}`)
+
+        // Получение сервиса
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        console.log(service)
+        addOutput(`<br>Получение сервиса: ${service}`)
+
+        // Получение характеристики
+        const nowWT = await service.getCharacteristic(UUID_WT);
+        console.log(nowWT)
+        addOutput(`<br>Получение характеристики: ${nowWT}`)
+
+        // Подписка на уведомления
+        await nowWT.startNotifications();
+        console.log('Подписан на уведомления nowWT характеристики');
+        // addOutput(`<br>Подписан на уведомления`)
+
+        // Обработчик уведомлений
+        nowWT.addEventListener('characteristicvaluechanged', (event) => {
+            // addOutput(`<br>characteristicvaluechanged`)
+            nowWTChanged(event.target.value);
+        });
+    } catch(error) {
+        addOutput(`<br>Ошибка: ${error.message}`)
+    }
+}
+
+// Установить Target Water T
+function setTWT(newWT) {
+    // finWT = field input WT
+    document.getElementById('finWT').value = newWT;
+
+}
+
+function nowWTChanged(dataView) {
+    // Создаём DataView из ArrayBuffer
+    const data = new DataView(dataView.buffer);
+
+    // Извлекаем timestamp (первые 4 байта, uint32)
+    const timestamp = data.getUint32(0, true); // true — little‑endian
+
+    // Преобразуем timestamp в читаемый формат даты
+    const date = new Date(timestamp * 1000); // timestamp в секундах → миллисекунды
+
+    // Извлекаем 4 значения uint16 (по 2 байта каждое, начиная с 4‑го байта)
+    const value1 = data.getUint16(4, true)/100.0;
+    const value2 = data.getUint16(6, true)/100.0;
+    const value3 = data.getUint16(8, true)/100.0;
+    const value4 = data.getUint16(10, true)/100.0;
+
+    
+    // addOutput(`<br>${date.toLocaleString()}, ${value1}`)
+    if (datasetsTW.datasets[0].data.length +1 > 5) {
+        datasetsTW.datasets[0].data.shift()
+        datasetsTW.datasets[1].data.shift()
+        datasetsTW.labels.shift()
+    } 
+    datasetsTW.datasets[0].data.push(value1) // вода
+    datasetsTW.datasets[1].data.push(25.0) // ключевая
+    datasetsTW.labels.push(timestampToLabel(date))
+    let wn = ""
+    datasetsTW.datasets[0].data.forEach(element => {
+        wn += `${element};`
+    });
+    addOutput(`<br>новая t воды, время(ч:с):${date.getHours()}:${date.getSeconds()}`)
+    chartWT.update()
+}
+
+/**
+ * Генерирует тестовые данные о температуре за каждый час с начала текущего года до текущего момента.
+ *
+ * @returns {Array<{timestamp: Date, temperature: number}>} Массив объектов с полями:
+ * - timestamp: дата и время измерения (объект Date);
+ * - temperature: температура в градусах Цельсия (число с одним знаком после запятой).
+ *
+ * @example
+ * const data = generateTemperatureData();
+ * console.log(data[0]); // { timestamp: Date, temperature: 5.3 }
+ */
+function generateTemperatureData() {
+    const data = [];
+    const now = new Date();
+    const startOfYear = new Date(now.getFullYear(), 0, 1); // Начало текущего года
+
+    // Генерируем данные за каждый час с начала года до текущего момента
+    for (let current = startOfYear; current <= now; current.setHours(current.getHours() + 1)) {
+        // Базовая температура зависит от месяца (сезонные колебания)
+        const month = current.getMonth();
+        const baseTemp = 5 + (month * 2.5); // От 5 °C в январе до ~32 °C в июле
+
+        // Добавляем случайные колебания ±5 °C и суточные колебания
+        const hour = current.getHours();
+        // const dailyVariation = Math.sin((hour / 24) * 2 * Math.PI) * 5; // Колебания в течение дня
+        const randomVariation = (Math.random() - 0.5)*5; // Случайные флуктуации
+
+        const temperature = baseTemp + randomVariation;
+
+        data.push({
+            timestamp: new Date(current),
+            temperature: parseFloat(temperature.toFixed(1)) // Округляем до 1 знака после запятой
+        });
+    }
+
+    return data;
+}
+
+/**
+ * Генерирует тестовые данные о температуре за каждый час в течение всего текущего года.
+ * Гарантированно создаёт данные за все 12 месяцев, независимо от текущей даты.
+ *
+ * @returns {Array<{timestamp: Date, temperature: number}>} Массив объектов с полями:
+ * - timestamp: дата и время измерения (объект Date);
+ * - temperature: температура в градусах Цельсия (число с одним знаком после запятой).
+ *
+ * @example
+ * const fullYearData = generateFullYearTemperatureData();
+ * console.log(`Сгенерировано ${fullYearData.length} точек данных`);
+ */
+function generateFullYearTemperatureData() {
+    const data = [];
+    const currentYear = new Date().getFullYear();
+    
+    // Начало года: 1 января 00:00
+    const startOfYear = new Date(currentYear, 0, 1, 0, 0, 0);
+    // Конец года: 31 декабря 23:59:59
+    const endOfYear = new Date(currentYear, 11, 31, 23, 59, 59);
+    let last = null;
+    // Генерируем данные за каждый час с начала до конца года
+    for (let current = new Date(startOfYear); current <= endOfYear; current.setHours(current.getHours() + 1)) {
+        // Базовая температура зависит от месяца (сезонные колебания)
+        const month = current.getMonth(); // 0–11
+        // Синусоидальная модель для более естественного сезонного изменения температуры
+        let baseTemp = 15 + 15 * Math.sin((month / 12) * 2 * Math.PI - Math.PI / 2);
+        if (last != null) {
+            if (baseTemp > last.temperature) {
+                baseTemp *= 0.9  
+            }
+        }
+
+        // Добавляем суточные колебания (пик днём, минимум ночью)
+        const hour = current.getHours();
+        const dailyVariation = 7 * Math.sin((hour / 24) * 2 * Math.PI);
+        
+        // Случайные флуктуации ±3 °C для реалистичности
+        const randomVariation = (Math.random() - 0.5) * 6;
+        
+        const temperature = baseTemp + dailyVariation + randomVariation;
+
+        last = {
+            timestamp: new Date(current),
+            temperature: parseFloat(temperature.toFixed(1)) // Округляем до 1 знака после запятой
+        }
+        data.push(last);
+    }
+
+    return data;
+}
+
+/**
+ * Вычисляет среднюю температуру за заданное количество часов для каждой точки данных.
+ * @param {Array<{timestamp: Date, temperature: number}>} temperatureData - Массив объектов с данными о температуре.
+ * @param {number} hoursCount - Количество часов для подсчёта средней температуры (должно быть положительным целым числом).
+ * @returns {Array<{timestamp: Date, temperature: number}>} Массив объектов с полями:
+ * - timestamp: дата и время измерения (объект Date);
+ * - averageTemperature: средняя температура за указанное количество часов (число с одним знаком после запятой).
+ * @throws {Error} Если входные данные некорректны.
+ */
+function calculateAverageTemperature(temperatureData, hoursCount) {
+    // Валидация входных данных
+    if (!Array.isArray(temperatureData)) {
+    throw new Error('Первый аргумент должен быть массивом');
+    }
+
+    if (typeof hoursCount !== 'number' || hoursCount <= 0 || !Number.isInteger(hoursCount)) {
+    throw new Error('Второй аргумент должен быть положительным целым числом');
+    }
+
+    if (temperatureData.length === 0) return []
+    else if (temperatureData.length === 1) return temperatureData;
+
+    // Проверяем корректность элементов массива
+    for (const item of temperatureData) {
+    if (!item.timestamp || !(item.timestamp instanceof Date) || isNaN(item.timestamp.getTime())) {
+        throw new Error('Каждый элемент массива должен содержать корректное поле timestamp типа Date');
+    }
+    if (typeof item.temperature !== 'number') {
+        throw new Error('Каждый элемент массива должен содержать поле temperature типа number');
+    }
+    }
+
+    // Сортировка
+    temperatureData.sort((a, b) => a.timestamp.valueOf() - b.timestamp.valueOf());
+    console.log(`1 temperatureData.length ${temperatureData.length}`)
+    let result = [];
+
+    const hours = hoursCount*60*60*1000; //ч*60м*60с*1000мс
+    let maxTimestamp = temperatureData[0].timestamp.valueOf() + hours; 
+    let sum = temperatureData[0].temperature;
+    let count = 1;
+    let index = 0;
+    for (let i = 1; i < temperatureData.length; i++) {
+        // console.log(`${temperatureData[i].timestamp.valueOf()}`)
+        // && i+1 < temperatureData.length
+        if (temperatureData[i].timestamp.valueOf() < maxTimestamp ) {
+            // console.log("temperatureData[i].timestamp < maxTimestamp")
+            sum += temperatureData[i].temperature;  
+            count++;
+        } else {
+            maxTimestamp = temperatureData[i].timestamp.valueOf() + hours
+            result.push({
+                timestamp: temperatureData[index].timestamp,
+                temperature: sum / count,
+            });
+            count = 1;
+            sum = temperatureData[i].temperature;
+            index = i;
+        }
+    }
+    console.log(`2 result.length ${result.length}`)
+
+    return result;
+}
+
+/**
+ * Преобразует сырые данные о температуре в формат, совместимый с библиотекой Chart.js.
+ * Формирует метки для оси X (дата и время) и массив температур для графика.
+ *
+ * @param {Array<{timestamp: Date, temperature: number}>} temperatureData - Массив объектов с данными о температуре.
+ * Каждый объект должен содержать:
+ *   - timestamp: дата и время (объект Date);
+ *   - temperature: температура (°C, число).
+ *
+ * @returns {{labels: string[], datasets: Array<{label: string, data: number[], borderColor: string, backgroundColor: string, tension: number, pointRadius: number, fill: boolean}>}}
+ * Объект с данными для Chart.js, содержащий:
+ *   - labels: массив строк с метками для оси X в формате «ДД.ММ ЧЧ:00»;
+ *   - datasets: массив наборов данных для графика, включая настройки стиля линии.
+ *
+ * @example
+ * const chartData = prepareChartData(rawData);
+ */
+function prepareChartData(temperatureData) {
+    const labels = temperatureData.map(item =>
+        `${item.timestamp.getDate()}.${item.timestamp.getMonth() + 1} ${item.timestamp.getHours()}:00`
+    );
+
+    const temperatures = temperatureData.map(item => item.temperature);
+    const pointCount = temperatureData.length;
+    return {
+        labels: labels,
+        datasets: [{
+            label: `t° Воды, °C`,
+            // label: `Температура (°C) (${pointCount} точек)`,
+            data: temperatures,
+            borderColor: 'rgba(255, 99, 132, 1)',
+            backgroundColor: 'rgba(255, 99, 133, 0.42)',
+            tension: 0.2, // Сглаживание линии
+            pointRadius: 0, // Убираем точки на графике для большого объёма данных
+            fill: true
+        }]
+    };
+}
+
+/**
+ * Создаёт график когда DOMContentLoaded, начальная точка.
+ */
+function setupChart() {
+    // Получаем тестовые данные
+    const rawData = generateTemperatureData();
+    // Подготавливаем данные для графика
+    const chartData = prepareChartData(calculateAverageTemperature(rawData, stepWT));
+    // const chartData = prepareChartData(rawData);
+    // Создаём график
+    const ctx = document.getElementById('ChartTW').getContext('2d');
+    // temperatureChart = new Chart(ctx, {
+    //     type: 'line',
+    //     data: chartData,
+    //     options: {
+    //         responsive: true,
+    //         maintainAspectRatio: true,
+    //         elements: {
+    //             line: {
+    //                 borderWidth: 2 // Толщина всех линий по умолчанию
+    //             }
+    //         },
+    //         scales: {
+    //             x: {
+    //                 title: {
+    //                     display: true,
+    //                     text: 'Дата и время'
+    //                 },
+    //                 ticks: {
+    //                     // autoSkip: true,
+    //                     maxTicksLimit: 20 // Ограничиваем количество подписей на оси X
+    //                 }
+    //             },
+    //             y: {
+    //                 title: {
+    //                     display: true,
+    //                     text: 'Температура (°C)'
+    //                 },
+    //                 // min: -20, // Минимальная температура на графике
+    //                 // max: 40  // Максимальная температура на графике
+    //             }
+    //         },
+    //         plugins: {
+    //             title: {
+    //                 display: false,
+    //                 text: 'Температура по часам в течение года'
+    //             },
+    //             tooltip: {
+    //                 mode: 'index',
+    //                 intersect: false
+    //             }
+    //         }
+    //     }
+    // });
+    chartWT = new Chart(ctx, configTW)
+}
+
+function updateChartWT() {
+    const rawData = generateTemperatureData();
+    const chartData = prepareChartData(calculateAverageTemperature(rawData, stepWT));
+    temperatureChart.data = chartData;
+    temperatureChart.update()
+}
+
+
+</script>
 </html>
